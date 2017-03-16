@@ -86,3 +86,10 @@ if (NOT NCODE_WEB_DISABLE_TESTS)
   add_test_exec(graph_test src/graph_test.cc ncode_web)
   add_test_exec(grapher_test src/grapher_test.cc ncode_web)
 endif()
+
+INSTALL(TARGETS ncode_web
+  DESTINATION "lib")
+
+INSTALL (
+  FILES ${WEB_HEADER_FILES}
+  DESTINATION include/ncode/ncode_web)
