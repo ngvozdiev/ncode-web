@@ -6,7 +6,7 @@ namespace web {
 namespace {
 
 struct DummyHeader {
-  static size_t MessageLen(const DummyHeader& header) { return header.len; }
+  static size_t MessageSize(const DummyHeader& header) { return header.len; }
 
   int len;
 };
@@ -16,13 +16,13 @@ class Fixture : public ::testing::Test {
   Fixture() : server_(8080, &incoming_, &outgoing_) {}
 
   std::unique_ptr<HeaderAndMessage<DummyHeader>> GetJunkMessage() {
-    auto message_ptr = make_unique<HeaderAndMessage<DummyHeader>>();
+    auto message_ptr = make_unique<HeaderAndMessage<DummyHeader>>(-1);
     message_ptr->header.len = 10000;
 
     std::vector<char>& msg = message_ptr->message;
     msg.resize(10000);
     std::fill(msg.begin(), msg.end(), 'a');
-    return std::move(message_ptr);
+    return message_ptr;
   }
 
   MessageQueue<DummyHeader> incoming_;
@@ -36,40 +36,71 @@ TEST_F(Fixture, StartWaitKill) {
   server_.Terminate();
 }
 
-// TEST_F(Fixture, SimpleMessage) {
-//  auto factory = std::unique_ptr<ServerConnectionFactory>(
-//      new DummyServerConnectionWrapperFactory(this));
-//
-//  Server server(8080, std::move(factory));
-//  Status server_start_status = server.StartLoop();
-//  ASSERT_TRUE(server_start_status.ok());
-//
-//  auto result = ClientConnection::Connect("127.0.0.1", 8080);
-//  ASSERT_TRUE(result.ok());
-//  std::unique_ptr<ClientConnection> client_connection = result.ValueOrDie();
-//
-//  auto message = GetJunkMessage();
-//
-//  ASSERT_TRUE(client_connection->WriteToSocket(std::move(message)).ok());
-//  std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-//  server.Terminate();
-//
-//  ASSERT_EQ(1, messages_.size());
-//  ASSERT_EQ(1, messages_[0].size());
-//  ASSERT_EQ(10000, messages_[0].at(0)->size());
-//}
+TEST_F(Fixture, SimpleMessage) {
+  server_.StartLoop();
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
+  ASSERT_TRUE(client);
+
+  auto message = GetJunkMessage();
+
+  ASSERT_TRUE(client->WriteToSocket(std::move(message)));
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  server_.Terminate();
+
+  std::vector<std::unique_ptr<HeaderAndMessage<DummyHeader>>> contents =
+      incoming_.Drain();
+
+  ASSERT_EQ(1, contents.size());
+  ASSERT_EQ(10000, contents[0]->message.size());
+}
+
+TEST_F(Fixture, LotsOfMessages) {
+  using namespace std::chrono;
+  size_t msg_count = 1 << 20;
+
+  server_.StartLoop();
+  std::this_thread::sleep_for(milliseconds(500));
+  auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
+  ASSERT_TRUE(client);
+
+  auto now = high_resolution_clock::now();
+  std::thread producer = std::thread([&client, this, msg_count] {
+    for (size_t i = 0; i < msg_count; ++i) {
+      auto message = GetJunkMessage();
+      ASSERT_TRUE(client->WriteToSocket(std::move(message)));
+    }
+  });
+
+  std::thread consumer = std::thread([this, msg_count] {
+    for (size_t i = 0; i < msg_count; ++i) {
+      std::unique_ptr<HeaderAndMessage<DummyHeader>> msg =
+          incoming_.ConsumeOrBlock();
+      ASSERT_EQ(10000, msg->message.size());
+    }
+  });
+
+  if (producer.joinable()) {
+    producer.join();
+  }
+
+  if (consumer.joinable()) {
+    consumer.join();
+  }
+
+  auto later = high_resolution_clock::now();
+  LOG(INFO) << msg_count << " in "
+            << duration_cast<milliseconds>(later - now).count() << "ms";
+
+  server_.Terminate();
+  ASSERT_EQ(0, incoming_.size());
+}
 
 // TEST_F(Fixture, SimpleMessageWaitReply) {
-//  auto factory = std::unique_ptr<ServerConnectionFactory>(
-//      new DummyServerConnectionWrapperFactory(this));
-//
-//  Server server(8080, std::move(factory));
-//  Status server_start_status = server.StartLoop();
-//  ASSERT_TRUE(server_start_status.ok());
-//
-//  auto result = ClientConnection::Connect("127.0.0.1", 8080);
-//  ASSERT_TRUE(result.ok());
-//  std::unique_ptr<ClientConnection> client_connection = result.ValueOrDie();
+//  server_.StartLoop();
+//  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+//  auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
+//  ASSERT_TRUE(client);
 //
 //  auto message = GetJunkMessage();
 //
@@ -84,40 +115,31 @@ TEST_F(Fixture, StartWaitKill) {
 //  ASSERT_EQ(10000, messages_[0].at(0)->size());
 //  ASSERT_EQ(*GetJunkMessage(), *read_result.ValueOrDie());
 //}
-//
-// TEST_F(Fixture, MultiSequentialConnections) {
-//  auto factory = std::unique_ptr<ServerConnectionFactory>(
-//      new DummyServerConnectionWrapperFactory(this));
-//
-//  Server server(8080, std::move(factory));
-//  Status server_start_status = server.StartLoop();
-//  ASSERT_TRUE(server_start_status.ok());
-//
-//  std::unique_ptr<ClientConnection> client_connection =
-//      ClientConnection::Connect("127.0.0.1", 8080).ValueOrDie();
-//
-//  auto message = GetJunkMessage();
-//  ASSERT_TRUE(client_connection->WriteToSocket(std::move(message)).ok());
-//  auto read_result = client_connection->ReadFromSocket();
-//  ASSERT_TRUE(read_result.ok());
-//
-//  client_connection->Close();
-//
-//  client_connection = ClientConnection::Connect("127.0.0.1",
-//  8080).ValueOrDie();
-//  message = GetJunkMessage();
-//  ASSERT_TRUE(client_connection->WriteToSocket(std::move(message)).ok());
-//  read_result = client_connection->ReadFromSocket();
-//  ASSERT_TRUE(read_result.ok());
-//
-//  server.Terminate();
-//
-//  ASSERT_EQ(2, messages_.size());
-//  ASSERT_EQ(1, messages_[0].size());
-//  ASSERT_EQ(1, messages_[1].size());
-//  ASSERT_EQ(10000, messages_[0].at(0)->size());
-//  ASSERT_EQ(10000, messages_[1].at(0)->size());
-//}
+
+TEST_F(Fixture, MultiSequentialConnections) {
+  server_.StartLoop();
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
+  ASSERT_TRUE(client);
+
+  auto message = GetJunkMessage();
+  ASSERT_TRUE(client->WriteToSocket(std::move(message)));
+
+  client->Close();
+  client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
+
+  message = GetJunkMessage();
+  ASSERT_TRUE(client->WriteToSocket(std::move(message)));
+
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+  server_.Terminate();
+  std::vector<std::unique_ptr<HeaderAndMessage<DummyHeader>>> contents =
+      incoming_.Drain();
+
+  ASSERT_EQ(2, contents.size());
+  ASSERT_EQ(10000, contents[0]->message.size());
+  ASSERT_EQ(10000, contents[1]->message.size());
+}
 //
 // TEST_F(Fixture, MultiSimultaneousConnection) {
 //  auto factory = std::unique_ptr<ServerConnectionFactory>(

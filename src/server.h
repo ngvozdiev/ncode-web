@@ -9,12 +9,14 @@
 #include <atomic>
 #include <cstdint>
 #include <map>
+#include <netdb.h>
 #include <string>
 #include <string.h>
 #include <thread>
 #include <vector>
 #include <deque>
 #include <netinet/in.h>
+#include <arpa/inet.h>
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <fcntl.h>
@@ -46,7 +48,7 @@ std::unique_ptr<HeaderAndMessage<HeaderType>> BlockingReadMessageFromSocket(
     return {};
   }
 
-  size_t message_len = HeaderType::MessageLen(header);
+  size_t message_len = HeaderType::MessageSize(header);
   message_ptr->message.resize(message_len);
   std::vector<char>& message_v = message_ptr->message;
   if (!BlockingRawReadFromSocket(socket, message_v.data(), message_len)) {
@@ -62,33 +64,85 @@ using MessageQueue = PtrQueue<HeaderAndMessage<HeaderType>, 1024>;
 template <typename HeaderType>
 class InputChannel {
  public:
-  InputChannel(int socket, MessageQueue<HeaderType>* outgoing)
-      : outgoing_(outgoing), socket_(socket) {
-    thread_ = std::thread([this] { ReadFromSocket(); });
-  }
+  InputChannel(int socket, MessageQueue<HeaderType>* incoming)
+      : offset_(0), socket_(socket), incoming_(incoming) {}
 
-  void ReadFromSocket() {
+  bool ReadFromSocket() {
+    const size_t header_len = sizeof(HeaderType);
+
     while (true) {
-      auto message_ptr = BlockingReadMessageFromSocket<HeaderType>(socket_);
-      if (!message_ptr) {
-        break;
-      }
+      bool header_seen = offset_ >= header_len;
+      if (!header_seen) {
+        char* header_ptr = reinterpret_cast<char*>(&header_);
 
-      if (!outgoing_->ProduceOrBlock(std::move(message_ptr))) {
-        break;
+        ssize_t bytes_read =
+            read(socket_, header_ptr + offset_, header_len - offset_);
+        if (bytes_read == -1 || bytes_read == 0) {
+          if (errno == EAGAIN) {
+            break;
+          }
+
+          LOG(ERROR) << "Unable to read / connection closed: "
+                     << strerror(errno);
+          return false;
+        }
+
+        offset_ += bytes_read;
+        if (offset_ < header_len) {
+          break;
+        }
+      } else {
+        size_t message_len = HeaderType::MessageSize(header_);
+        if (message_len != 0) {
+          message_.resize(std::max(message_.size(), message_len));
+
+          size_t into_message = offset_ - header_len;
+          ssize_t bytes_read = read(socket_, message_.data() + into_message,
+                                    message_len - into_message);
+          if (bytes_read == -1 || bytes_read == 0) {
+            if (errno == EAGAIN) {
+              break;
+            }
+
+            LOG(ERROR) << "Unable to read / connection closed: "
+                       << strerror(errno);
+            return false;
+          }
+
+          offset_ += bytes_read;
+          if (offset_ < message_len + header_len) {
+            break;
+          }
+        }
+
+        auto header_and_message =
+            make_unique<HeaderAndMessage<HeaderType>>(socket_);
+        header_and_message->header = header_;
+        header_and_message->message = std::move(message_);
+        incoming_->ProduceOrBlock(std::move(header_and_message));
+
+        offset_ = 0;
       }
     }
+
+    return true;
   }
 
  private:
-  // Thread that constantly tries to write to the socket.
-  std::thread thread_;
+  // Stores the header.
+  HeaderType header_;
 
-  // Messages come from here.
-  MessageQueue<HeaderType>* outgoing_;
+  // Stores the message.
+  std::vector<char> message_;
+
+  // A single offset into header + message.
+  size_t offset_;
 
   // The socket.
   int socket_;
+
+  // Outgoing messages.
+  MessageQueue<HeaderType>* incoming_;
 
   DISALLOW_COPY_AND_ASSIGN(InputChannel);
 };
@@ -119,6 +173,8 @@ class ServerConnection {
                    MessageQueue<HeaderType>* incoming)
       : address_(address), input_channel_(socket, incoming) {}
 
+  bool Read() { return input_channel_.ReadFromSocket(); }
+
  private:
   sockaddr_in address_;
   InputChannel<HeaderType> input_channel_;
@@ -146,18 +202,24 @@ class TCPServer {
 
   // Kills the server.
   void Terminate() {
+    if (to_kill_) {
+      return;
+    }
+
     LOG(INFO) << "Closing socket and terminating server.";
-    close(tcp_socket_);
     to_kill_ = true;
 
-    if (thread_.joinable()) {
-      thread_.join();
-    }
+    Join();
+    close(tcp_socket_);
   }
 
   void Join() {
     if (thread_.joinable()) {
       thread_.join();
+    }
+
+    if (send_thread_.joinable()) {
+      send_thread_.join();
     }
   }
 
@@ -189,6 +251,9 @@ class TCPServer {
     if (listen(tcp_socket_, 10) == -1) {
       LOG(FATAL) << "Unable to listen";
     }
+
+    // Set to non-blocking
+    fcntl(tcp_socket_, F_SETFL, O_NONBLOCK);
   }
 
   // Called when a new TCP connection is established with the server. Accepts
@@ -213,10 +278,12 @@ class TCPServer {
 
     fcntl(socket, F_SETFL, O_NONBLOCK);
     *new_socket = socket;
+    LOG(INFO) << "New connection with " << inet_ntoa(remote_address.sin_addr)
+              << " socket " << socket;
 
-    active_connections_.emplace(std::piecewise_construct,
-                                std::forward_as_tuple(socket),
-                                std::forward_as_tuple(remote_address, socket));
+    active_connections_.emplace(
+        std::piecewise_construct, std::forward_as_tuple(socket),
+        std::forward_as_tuple(remote_address, socket, incoming_));
   }
 
   // Runs the main server loop. Will block.
@@ -239,10 +306,9 @@ class TCPServer {
       timeval tv = {0, 0};
       tv.tv_sec = 1;
 
-      int select_return = select(last_fd + 1, &read_fds, &write_fds, NULL, &tv);
-
+      int select_return = select(last_fd + 1, &read_fds, nullptr, NULL, &tv);
       if (select_return < 0) {
-        LOG(FATAL) << "Unable to select";
+        LOG(FATAL) << "Unable to select: " << strerror(errno);
       }
 
       if (select_return == 0) {
@@ -265,41 +331,34 @@ class TCPServer {
               last_fd = new_socket;
             }
           } else {
-            if (!ReadFromSocket(i)) {
+            ServerConnection<HeaderType>* connection =
+                FindOrNull(active_connections_, i);
+            if (connection == nullptr) {
+              //              LOG(INFO) << "Missing connection for socket " <<
+              //              i;
+              continue;
+            }
+
+            if (!connection->Read()) {
               LOG(INFO) << "Error in connection";
               active_connections_.erase(i);
             }
           }
         }
-
-        if (FD_ISSET(i, &write_fds)) {
-          WriteToSocket(i);
-        }
       }
-    }
-
-    while (!to_kill_) {
-      sockaddr_in remote_address;
-      socklen_t address_len = sizeof(remote_address);
-
-      int socket = accept(tcp_socket_,
-                          reinterpret_cast<struct sockaddr*>(&remote_address),
-                          &address_len);
-      if (socket) {
-        LOG(FATAL) << "Unable to accept: " + std::string(strerror(errno));
-        break;
-      }
-
-      active_connections_.emplace(
-          std::piecewise_construct, std::forward_as_tuple(socket),
-          std::forward_as_tuple(remote_address, socket, incoming_, outgoing_));
     }
   }
 
   void WriteToSocket() {
-    while (true) {
+    while (!to_kill_) {
+      bool timed_out;
       std::unique_ptr<HeaderAndMessage<HeaderType>> message =
-          outgoing_->ConsumeOrBlock();
+          outgoing_->ConsumeOrBlockWithTimeout(std::chrono::seconds(1),
+                                               &timed_out);
+      if (timed_out) {
+        continue;
+      }
+
       if (!message) {
         break;
       }
@@ -340,7 +399,20 @@ class TCPServer {
 template <typename HeaderType>
 class ClientConnection {
  public:
-  static void ResolveHostName(const std::string& hostname, in_addr* addr);
+  static void ResolveHostName(const std::string& hostname, in_addr* addr) {
+    addrinfo* res;
+
+    int result = getaddrinfo(hostname.c_str(), NULL, NULL, &res);
+    if (result == 0) {
+      memcpy(addr, &(reinterpret_cast<sockaddr_in*>(res->ai_addr))->sin_addr,
+             sizeof(in_addr));
+      freeaddrinfo(res);
+
+      return;
+    }
+
+    LOG(FATAL) << "Unable to resolve";
+  }
 
   static std::unique_ptr<ClientConnection> Connect(
       const std::string& destination_address, uint32_t port) {
@@ -354,15 +426,18 @@ class ClientConnection {
     int s = ::socket(AF_INET, SOCK_STREAM, 0);
     if (::connect(s, reinterpret_cast<sockaddr*>(&address), sizeof(address)) !=
         0) {
-      LOG(FATAL) << "Unable to connect";
+      LOG(FATAL) << "Unable to connect: " << strerror(errno);
     }
 
     return std::unique_ptr<ClientConnection>(new ClientConnection(s));
   }
 
   // Writes a message
-  void WriteToSocket(std::unique_ptr<HeaderAndMessage<HeaderType>> msg) const {
-    BlockingWriteMessageToSocket(std::move(msg));
+  bool WriteToSocket(std::unique_ptr<HeaderAndMessage<HeaderType>> msg) const {
+    if (msg->socket == -1) {
+      msg->socket = tcp_socket_;
+    }
+    return BlockingWriteMessageToSocket(std::move(msg));
   }
 
   // Reads a message
