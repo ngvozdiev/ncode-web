@@ -3,38 +3,39 @@
 
 #include <ncode/ncode_common/common.h>
 #include <stddef.h>
-#include <unistd.h>
-#include <array>
-#include <atomic>
+#include <chrono>
 #include <cstdint>
-#include <map>
 #include <string>
-#include <thread>
-#include <vector>
+
+#include "server.h"
 
 namespace nc {
 namespace web {
 
-enum RecordType : uint8_t {
-  BEGIN_REQUEST = 1,
-  ABORT_REQUEST = 2,
-  END_REQUEST = 3,
-  PARAMS = 4,
-  IN = 5,
-  OUT = 6,
-  ERR = 7,
-  DATA = 8,
-  GET_VALUES = 9,
-  GET_VALUES_RESULT = 10,
-  UNKNOWN_TYPE = 11
-};
-
 struct FastCGIRecordHeader {
+  enum Type : uint8_t {
+    BEGIN_REQUEST = 1,
+    ABORT_REQUEST = 2,
+    END_REQUEST = 3,
+    PARAMS = 4,
+    STDIN = 5,
+    STDOUT = 6,
+    STDERR = 7,
+    DATA = 8,
+    GET_VALUES = 9,
+    GET_VALUES_RESULT = 10,
+    UNKNOWN_TYPE = 11
+  };
+
+  static size_t MessageSize(const FastCGIRecordHeader& header);
+
+  std::string ToString();
+
   // FastCGI version number
   uint8_t version;
 
   // Record type
-  RecordType type;
+  Type type;
 
   // Request ID
   uint16_t id;
@@ -49,103 +50,76 @@ struct FastCGIRecordHeader {
   uint8_t reserved;
 };
 
-class FastCGIRequest {
- public:
-  FastCGIRequest(const std::map<std::string, std::string>& params,
-                 const std::string& content)
-      : params_(params), content_(content) {}
-
-  const std::map<std::string, std::string>& params() const { return params_; }
-
-  const std::string& content() const { return content_; }
-
- private:
-  std::map<std::string, std::string> params_;
-  std::string content_;
+// Begin request.
+struct FastCGIBeginRequestBody {
+  uint16_t role;
+  uint8_t flags;
+  uint8_t reserved[5];
 };
+
+enum FastCGIRole : uint16_t {
+  FCGI_RESPONDER = 1,
+  FCGI_AUTHORIZER = 2,
+  FCGI_FILTER = 3,
+};
+
+using FastCGIMessage = HeaderAndMessage<FastCGIRecordHeader>;
+using FastCGIMessageQueue = TCPServer<FastCGIRecordHeader>::QueueType;
+using FastCGIRecordList = std::vector<std::unique_ptr<FastCGIMessage>>;
 
 class FastCGIServer {
  public:
-  FastCGIServer(uint32_t port)
-      : tcp_socket_(-1), port_(port), to_kill_(false) {}
+  static constexpr std::chrono::milliseconds kDefaultTimeout =
+      std::chrono::milliseconds(500);
 
-  ~FastCGIServer() { Terminate(); }
+  FastCGIServer(FastCGIMessageQueue* input, FastCGIMessageQueue* output)
+      : to_kill_(false), input_(input), output_(output) {}
 
-  // Starts the main loop.
-  void StartLoop() {
-    OpenSocket();
-    thread_ = std::thread([this] { Loop(); });
+  void Start() {
+    thread_ = std::thread([this] { Run(); });
   }
 
-  // Kills the server.
-  void Terminate() {
+  void Stop() {
     to_kill_ = true;
-
-    if (thread_.joinable()) {
-      thread_.join();
-    }
-
-    close(tcp_socket_);
-  }
-
-  void Join() {
     if (thread_.joinable()) {
       thread_.join();
     }
   }
+
+  ~FastCGIServer() { Stop(); }
+
+  // Handles a message.
+  std::string Handle(const std::string& input,
+                     const std::map<std::string, std::string>& params) = 0;
 
  private:
-  // This is the max number of bytes a complete record can have (rounded up to
-  // 4K multiplier).
-  struct Buffer {
-    Buffer() : total(0) {}
+  void Run();
 
-    std::array<char, 68000ul> data;
-    size_t total;
-  };
+  void HandleMessage(std::unique_ptr<FastCGIMessage> message);
 
-  // A complete CGIRecord.
-  struct FastCGIRecord {
-    FastCGIRecordHeader header;
-    std::vector<char> contents;
-  };
-
-  // Handles a complete record.
-  void HandleRecord(FastCGIRecord&& record);
-
-  // Reads from a socket into its buffer in active_connections_. If the read
-  // completes a record it will be constructed and HandleRecord called.
-  bool ReadFromSocket(int socket);
-
-  // Opens the socket for listening.
-  void OpenSocket();
-
-  // Runs the main server loop. Will block.
-  void Loop();
-
-  // Called when a new TCP connection is established with the server. Accepts
-  // the connection and populates new_socket with  the new socket. Will also set
-  // try_again to true if EWOULDBLOCK is returned by accept.
-  void NewTcpConnection(int* new_socket, bool* try_again);
-
-  // Currently active connections. Map from socket to a buffer that holds the
-  // FastCGIRecord currently being received.
-  std::map<int, Buffer> active_connections_;
-
-  // The socket the server listens on.
-  int tcp_socket_;
-
-  // The port the server should listen to.
-  const uint32_t port_;
-
-  // Set to true when the server needs to exit.
   std::atomic<bool> to_kill_;
-
-  // The server's main thread.
   std::thread thread_;
+
+  FastCGIMessageQueue* input_;
+  FastCGIMessageQueue* output_;
+
+  // For each request id the list of messages received for this request.
+  std::map<uint16_t, FastCGIRecordList> requests_;
 
   DISALLOW_COPY_AND_ASSIGN(FastCGIServer);
 };
+
+// Extracts a single integer encoded as in the FCGI spec.
+uint32_t FCGIConsumeInt(std::vector<char>::const_iterator* it_ptr);
+
+// Extracts key-value pairs from a stream of data.
+std::map<std::string, std::string> FCGIParseNVPairs(
+    const std::vector<char>& data);
+
+// Combines a series of messages into a stream.
+std::vector<char> FCGIGetStream(FastCGIRecordHeader::Type type,
+                                FastCGIRecordList::const_iterator* it_ptr,
+                                FastCGIRecordList::const_iterator end);
 
 }  // namespace web
 }  // namespace nc

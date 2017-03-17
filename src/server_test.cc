@@ -17,10 +17,10 @@ class Fixture : public ::testing::Test {
 
   std::unique_ptr<HeaderAndMessage<DummyHeader>> GetJunkMessage() {
     auto message_ptr = make_unique<HeaderAndMessage<DummyHeader>>(-1);
-    message_ptr->header.len = 10000;
+    message_ptr->header.len = 1000;
 
     std::vector<char>& msg = message_ptr->message;
-    msg.resize(10000);
+    msg.resize(1000);
     std::fill(msg.begin(), msg.end(), 'a');
     return message_ptr;
   }
@@ -31,13 +31,13 @@ class Fixture : public ::testing::Test {
 };
 
 TEST_F(Fixture, StartWaitKill) {
-  server_.StartLoop();
+  server_.Start();
   std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-  server_.Terminate();
+  server_.Stop();
 }
 
 TEST_F(Fixture, SimpleMessage) {
-  server_.StartLoop();
+  server_.Start();
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
   ASSERT_TRUE(client);
@@ -46,24 +46,24 @@ TEST_F(Fixture, SimpleMessage) {
 
   ASSERT_TRUE(client->WriteToSocket(std::move(message)));
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  server_.Terminate();
+  server_.Stop();
 
   std::vector<std::unique_ptr<HeaderAndMessage<DummyHeader>>> contents =
       incoming_.Drain();
 
   ASSERT_EQ(1, contents.size());
-  ASSERT_EQ(10000, contents[0]->message.size());
+  ASSERT_EQ(1000, contents[0]->message.size());
 }
 
 TEST_F(Fixture, LotsOfMessages) {
   using namespace std::chrono;
-  size_t msg_count = 1 << 20;
+  size_t msg_count = 1 << 17;
   std::vector<std::unique_ptr<HeaderAndMessage<DummyHeader>>> messages;
   for (size_t i = 0; i < msg_count; ++i) {
     messages.emplace_back(GetJunkMessage());
   }
 
-  server_.StartLoop();
+  server_.Start();
   std::this_thread::sleep_for(milliseconds(500));
   auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
   ASSERT_TRUE(client);
@@ -79,7 +79,7 @@ TEST_F(Fixture, LotsOfMessages) {
     for (size_t i = 0; i < msg_count; ++i) {
       std::unique_ptr<HeaderAndMessage<DummyHeader>> msg =
           incoming_.ConsumeOrBlock();
-      ASSERT_EQ(10000, msg->message.size());
+      ASSERT_EQ(1000, msg->message.size());
     }
   });
 
@@ -95,7 +95,7 @@ TEST_F(Fixture, LotsOfMessages) {
   LOG(INFO) << msg_count << " in "
             << duration_cast<milliseconds>(later - now).count() << "ms";
 
-  server_.Terminate();
+  server_.Stop();
   ASSERT_EQ(0, incoming_.size());
 }
 
@@ -120,7 +120,7 @@ TEST_F(Fixture, LotsOfMessages) {
 //}
 
 TEST_F(Fixture, MultiSequentialConnections) {
-  server_.StartLoop();
+  server_.Start();
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
   auto client = ClientConnection<DummyHeader>::Connect("127.0.0.1", 8080);
   ASSERT_TRUE(client);
@@ -135,7 +135,7 @@ TEST_F(Fixture, MultiSequentialConnections) {
   ASSERT_TRUE(client->WriteToSocket(std::move(message)));
 
   std::this_thread::sleep_for(std::chrono::milliseconds(500));
-  server_.Terminate();
+  server_.Stop();
   std::vector<std::unique_ptr<HeaderAndMessage<DummyHeader>>> contents =
       incoming_.Drain();
 

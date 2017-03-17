@@ -77,8 +77,8 @@ create_resources("${PROJECT_SOURCE_DIR}/data/grapher_templates" "${PROJECT_BINAR
 ################################
 # Web and grapher
 ################################
-set(WEB_HEADER_FILES src/web_page.h src/graph.h src/grapher.h src/server.h)
-add_library(ncode_web STATIC src/web_page.cc src/graph.cc src/grapher.cc src/server.cc ${PROJECT_BINARY_DIR}/www_resources.c ${PROJECT_BINARY_DIR}/grapher_resources.c ${WEB_HEADER_FILES})
+set(WEB_HEADER_FILES src/web_page.h src/graph.h src/grapher.h src/server.h src/fcgi.h)
+add_library(ncode_web STATIC src/web_page.cc src/graph.cc src/grapher.cc src/server.cc src/fcgi.cc ${PROJECT_BINARY_DIR}/www_resources.c ${PROJECT_BINARY_DIR}/grapher_resources.c ${WEB_HEADER_FILES})
 target_link_libraries(ncode_web ncode_common ncode_net ${CTEMPLATE_LIBRARIES})
 
 if (NOT NCODE_WEB_DISABLE_TESTS)
@@ -86,7 +86,11 @@ if (NOT NCODE_WEB_DISABLE_TESTS)
   add_test_exec(graph_test src/graph_test.cc ncode_web)
   add_test_exec(grapher_test src/grapher_test.cc ncode_web)
   add_test_exec(server_test src/server_test.cc ncode_web)
+  add_test_exec(fcgi_test src/fcgi_test.cc ncode_web)
 endif()
+
+add_executable(fcgi_main src/fcgi_main.cc)
+target_link_libraries(fcgi_main ncode_web gflags pthread)
 
 INSTALL(TARGETS ncode_web
   DESTINATION "lib")

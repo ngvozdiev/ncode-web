@@ -1,192 +1,149 @@
 #include "fcgi.h"
 
-#include <fcntl.h>
 #include <ncode/ncode_common/logging.h>
+#include <ncode/ncode_common/substitute.h>
+#include <ncode/ncode_common/ptr_queue.h>
 #include <netinet/in.h>
-#include <sys/select.h>
-#include <sys/socket.h>
-#include <sys/time.h>
-#include <algorithm>
-#include <cerrno>
-#include <cstring>
-#include <iterator>
+#include <memory>
 
 namespace nc {
 namespace web {
 
-bool FastCGIServer::ReadFromSocket(int socket) {
-  size_t header_len = sizeof(FastCGIRecordHeader);
-
-  Buffer& current_buffer = active_connections_[socket];
-  bool header_seen = current_buffer.total >= header_len;
-  while (true) {
-    size_t& current_total = current_buffer.total;
-    if (!header_seen) {
-      ssize_t bytes_read =
-          read(socket, current_buffer.data.data() + current_total,
-               header_len - current_total);
-      if (bytes_read == -1 || bytes_read == 0) {
-        if (errno == EAGAIN) {
-          break;
-        }
-
-        LOG(ERROR) << "Unable to read / connection closed";
-        return false;
-      }
-
-      current_total += bytes_read;
-      if (current_total < header_len) {
-        break;
-      }
-    } else {
-      const FastCGIRecordHeader* header =
-          reinterpret_cast<FastCGIRecordHeader*>(current_buffer.data.data());
-      uint16_t content_len = ntohs(header->content_len);
-      uint16_t padding_len = ntohs(header->padding_len);
-
-      if (content_len != 0 && padding_len != 0) {
-        size_t total_record_len = header_len + content_len + padding_len;
-        ssize_t bytes_read =
-            read(socket, current_buffer.data.data() + current_total,
-                 total_record_len - current_total);
-        if (bytes_read == -1 || bytes_read == 0) {
-          if (errno == EAGAIN) {
-            break;
-          }
-
-          LOG(ERROR) << "Unable to read / connection closed";
-          return false;
-        }
-
-        current_total += bytes_read;
-        if (current_total < total_record_len) {
-          break;
-        }
-      }
-
-      // Copy the header and data into a complete record.
-      FastCGIRecord record;
-      record.header = *header;
-      record.header.content_len = content_len;
-      record.header.padding_len = padding_len;
-
-      record.contents.resize(content_len);
-      std::copy(
-          std::next(current_buffer.data.begin(), header_len),
-          std::next(current_buffer.data.begin(), header_len + content_len),
-          record.contents.begin());
-
-      HandleRecord(std::move(record));
-      current_buffer.total = 0;
-    }
-  }
-
-  return true;
+size_t FastCGIRecordHeader::MessageSize(const FastCGIRecordHeader& header) {
+  return ntohs(header.content_len) + header.padding_len;
 }
 
-void FastCGIServer::Loop() {
-  int last_fd = tcp_socket_;
-  fd_set master;
-  fd_set read_fds;
+std::string FastCGIRecordHeader::ToString() {
+  return Substitute(
+      "Version: $0, type: $1, id: $2, content_len: $3, padding_len: $4",
+      version, type, ntohs(id), ntohs(content_len), padding_len);
+}
 
-  FD_ZERO(&master);
-  FD_ZERO(&read_fds);
-
-  FD_SET(tcp_socket_, &master);
-
+void FastCGIServer::Run() {
   while (!to_kill_) {
-    read_fds = master;
-
-    timeval tv = {0, 0};
-    tv.tv_sec = 1;
-
-    int select_return = select(last_fd + 1, &read_fds, NULL, NULL, &tv);
-
-    if (select_return < 0) {
-      LOG(FATAL) << "Unable to select";
+    bool timed_out;
+    std::unique_ptr<FastCGIMessage> message =
+        input_->ConsumeOrBlockWithTimeout(kDefaultTimeout, &timed_out);
+    if (timed_out) {
+      continue;
     }
 
-    if (select_return == 0) {
-      continue;  // Timed out
+    if (!message) {
+      break;
     }
 
-    for (int i = 0; i <= last_fd; i++) {
-      if (FD_ISSET(i, &read_fds)) {
-        if (i == tcp_socket_) {
-          int new_socket;
-          bool try_again;
-
-          NewTcpConnection(&new_socket, &try_again);
-
-          if (try_again) {
-            break;
-          }
-
-          FD_SET(new_socket, &master);
-          if (new_socket > last_fd) {
-            last_fd = new_socket;
-          }
-        } else {
-          if (!ReadFromSocket(i)) {
-            LOG(INFO) << "Error in connection";
-            active_connections_.erase(i);
-          }
-        }
-      }
-    }
+    LOG(INFO) << message->header.ToString();
+    HandleMessage(std::move(message));
   }
 }
 
-void FastCGIServer::NewTcpConnection(int* new_socket, bool* try_again) {
-  struct sockaddr_in remote_address;
-  socklen_t address_len = sizeof(remote_address);
+uint32_t FCGIConsumeInt(std::vector<char>::const_iterator* it_ptr) {
+  std::vector<char>::const_iterator& it = *it_ptr;
 
-  *try_again = false;
-  int socket;
-  if ((socket = accept(tcp_socket_,
-                       reinterpret_cast<struct sockaddr*>(&remote_address),
-                       &address_len)) == -1) {
-    if (errno != EWOULDBLOCK) {
-      LOG(FATAL) << "Unable to accept";
+  uint8_t first_byte = *it;
+  if (first_byte >> 7 == 0) {
+    ++it;
+    return first_byte;
+  }
+
+  uint8_t b3 = first_byte;
+  uint8_t b2 = *(++it);
+  uint8_t b1 = *(++it);
+  uint8_t b0 = *(++it);
+  ++it;
+  return ((b3 & 0x7f) << 24) + (b2 << 16) + (b1 << 8) + b0;
+}
+
+std::map<std::string, std::string> FCGIParseNVPairs(
+    const std::vector<char>& data) {
+  std::map<std::string, std::string> out;
+
+  auto it = data.begin();
+  while (it != data.end()) {
+    uint32_t name_len = FCGIConsumeInt(&it);
+    uint32_t value_len = FCGIConsumeInt(&it);
+
+    std::string key(it, std::next(it, name_len));
+    std::advance(it, name_len);
+    std::string value(it, std::next(it, value_len));
+    std::advance(it, value_len);
+    out[key] = value;
+  }
+
+  return out;
+}
+
+std::vector<char> FCGIGetStream(FastCGIRecordHeader::Type type,
+                                FastCGIRecordList::const_iterator* it_ptr,
+                                FastCGIRecordList::const_iterator end) {
+  std::vector<char> out;
+
+  bool found_end = false;
+  while (*it_ptr != end) {
+    FastCGIRecordList::const_iterator& it = *it_ptr;
+
+    const std::vector<char>& contents = (*it)->message;
+    const FastCGIRecordHeader& header = (*it)->header;
+    ++it;
+
+    CHECK(header.type == type);
+    if (header.content_len == 0) {
+      found_end = true;
+      break;
     }
 
-    *try_again = true;
+    out.insert(out.end(), contents.begin(), contents.end());
+  }
+
+  CHECK(found_end);
+  return out;
+}
+
+static FastCGIRecordList StreamToMessages(const std::string& out) {
+  size_t max_len = std::numeric_limits<uint16_t>::max();
+}
+
+void FastCGIServer::HandleMessage(std::unique_ptr<FastCGIMessage> message) {
+  const FastCGIRecordHeader& header = message->header;
+  uint16_t content_len = ntohs(header.content_len);
+  bool is_last = header.type == FastCGIRecordHeader::STDIN && content_len == 0;
+  uint16_t id = header.id;
+
+  FastCGIRecordList& records = requests_[id];
+  records.emplace_back(std::move(message));
+  if (!is_last) {
     return;
   }
 
-  fcntl(socket, F_SETFL, O_NONBLOCK);
-  *new_socket = socket;
-}
+  // Record is the last from a request. Will pack it up and offload it, but
+  // first check that it is complete.
+  FastCGIRecordList::const_iterator it = records.begin();
+  const FastCGIMessage& begin_record = *(it->get());
+  CHECK(begin_record.header.type == FastCGIRecordHeader::BEGIN_REQUEST);
+  CHECK(ntohs(begin_record.header.content_len) ==
+        sizeof(FastCGIBeginRequestBody));
 
-void FastCGIServer::OpenSocket() {
-  sockaddr_in address;
-  memset(reinterpret_cast<char*>(&address), 0, sizeof(address));
+  const FastCGIBeginRequestBody* begin_request_body =
+      reinterpret_cast<const FastCGIBeginRequestBody*>(
+          begin_record.message.data());
+  uint16_t role = ntohs(begin_request_body->role);
+  CHECK(role == FastCGIRole::FCGI_RESPONDER);
 
-  if ((tcp_socket_ = socket(AF_INET, SOCK_STREAM, 0)) == -1) {
-    LOG(FATAL) << "Unable to get socket";
+  // Start parsing, this should be the first of the params records.
+  ++it;
+
+  std::vector<char> params =
+      FCGIGetStream(FastCGIRecordHeader::PARAMS, &it, records.end());
+  std::vector<char> contents =
+      FCGIGetStream(FastCGIRecordHeader::STDIN, &it, records.end());
+
+  std::map<std::string, std::string> nv_pairs = FCGIParseNVPairs(params);
+  for (const auto& key_and_value : nv_pairs) {
+    LOG(INFO) << key_and_value.first << " --> " << key_and_value.second;
   }
 
-  address.sin_family = AF_INET;
-  address.sin_port = htons(port_);
-  address.sin_addr.s_addr = INADDR_ANY;
-
-  int yes = 1;
-  if (setsockopt(tcp_socket_, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(int)) ==
-      -1) {
-    LOG(FATAL) << "Unable to set REUSEADDR";
-  }
-
-  if (bind(tcp_socket_, reinterpret_cast<sockaddr*>(&address),
-           sizeof(sockaddr)) == -1) {
-    LOG(FATAL) << "Unable to bind: " + std::string(strerror(errno));
-  }
-
-  if (listen(tcp_socket_, 10) == -1) {
-    LOG(FATAL) << "Unable to listen";
-  }
-
-  // Set to non-blocking
-  fcntl(tcp_socket_, F_SETFL, O_NONBLOCK);
+  std::string contents_str(contents.begin(), contents.end());
+  std::string out = Handle(contents_str, nv_pairs);
 }
 
 }  // namespace web

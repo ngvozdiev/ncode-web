@@ -183,25 +183,26 @@ class ServerConnection {
 template <typename HeaderType>
 class TCPServer {
  public:
-  TCPServer(uint32_t port, MessageQueue<HeaderType>* incoming,
-            MessageQueue<HeaderType>* outgoing)
+  using QueueType = MessageQueue<HeaderType>;
+
+  TCPServer(uint32_t port, QueueType* incoming, QueueType* outgoing)
       : tcp_socket_(-1),
         port_(port),
         to_kill_(false),
         incoming_(incoming),
         outgoing_(outgoing) {}
 
-  virtual ~TCPServer() { Terminate(); }
+  virtual ~TCPServer() { Stop(); }
 
   // Starts the main loop.
-  void StartLoop() {
+  void Start() {
     OpenSocket();
     thread_ = std::thread([this] { Loop(); });
     send_thread_ = std::thread([this] { WriteToSocket(); });
   }
 
   // Kills the server.
-  void Terminate() {
+  void Stop() {
     if (to_kill_) {
       return;
     }
@@ -388,8 +389,8 @@ class TCPServer {
   std::thread send_thread_;
 
   // Queues for messages leaving out/coming in.
-  MessageQueue<HeaderType>* incoming_;
-  MessageQueue<HeaderType>* outgoing_;
+  QueueType* incoming_;
+  QueueType* outgoing_;
 
   DISALLOW_COPY_AND_ASSIGN(TCPServer);
 };
