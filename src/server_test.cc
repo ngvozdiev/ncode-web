@@ -58,6 +58,10 @@ TEST_F(Fixture, SimpleMessage) {
 TEST_F(Fixture, LotsOfMessages) {
   using namespace std::chrono;
   size_t msg_count = 1 << 20;
+  std::vector<std::unique_ptr<HeaderAndMessage<DummyHeader>>> messages;
+  for (size_t i = 0; i < msg_count; ++i) {
+    messages.emplace_back(GetJunkMessage());
+  }
 
   server_.StartLoop();
   std::this_thread::sleep_for(milliseconds(500));
@@ -65,10 +69,9 @@ TEST_F(Fixture, LotsOfMessages) {
   ASSERT_TRUE(client);
 
   auto now = high_resolution_clock::now();
-  std::thread producer = std::thread([&client, this, msg_count] {
+  std::thread producer = std::thread([&client, this, msg_count, &messages] {
     for (size_t i = 0; i < msg_count; ++i) {
-      auto message = GetJunkMessage();
-      ASSERT_TRUE(client->WriteToSocket(std::move(message)));
+      ASSERT_TRUE(client->WriteToSocket(std::move(messages[i])));
     }
   });
 
