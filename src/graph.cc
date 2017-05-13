@@ -3,8 +3,6 @@
 #include <ctemplate/template.h>
 #include <ctemplate/template_dictionary.h>
 #include <ctemplate/template_enums.h>
-#include <ncode/ncode_common/logging.h>
-#include <ncode/ncode_common/map_util.h>
 #include <algorithm>
 #include <map>
 #include <set>
@@ -12,6 +10,8 @@
 
 #include "json.hpp"
 #include "web_page.h"
+#include "ncode_common/src/logging.h"
+#include "ncode_common/src/map_util.h"
 
 namespace nc {
 namespace web {
@@ -109,10 +109,10 @@ void GraphToHTML(const std::vector<EdgeData>& edges,
     path_data_helper.label = path_data.label;
     path_data_helper.legend_label = path_data.legend_label;
 
-    const net::GraphPath* path = path_data.path;
-    path_data_helper.node_indices.reserve(path->link_sequence().size() + 1);
+    const net::Walk* path = path_data.path;
+    path_data_helper.node_indices.reserve(path->links().size() + 1);
 
-    const net::Links& links_on_path = path->link_sequence().links();
+    const net::Links& links_on_path = path->links();
     for (net::GraphLinkIndex link : links_on_path) {
       net::GraphNodeIndex src_index = storage->GetLink(link)->src();
       net::GraphNodeIndex dst_index = storage->GetLink(link)->dst();

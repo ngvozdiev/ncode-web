@@ -1,8 +1,6 @@
 #ifndef NCODE_GRAPHER_H_
 #define NCODE_GRAPHER_H_
 
-#include <ncode/ncode_common/common.h>
-#include <ncode/ncode_common/logging.h>
 #include <stddef.h>
 #include <algorithm>
 #include <limits>
@@ -10,6 +8,9 @@
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/logging.h"
 
 namespace nc {
 namespace web {

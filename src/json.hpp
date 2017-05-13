@@ -34,7 +34,7 @@ Licensed under the MIT License <http://opensource.org/licenses/MIT>.
 #include <utility>
 #include <vector>
 
-#include <ncode/ncode_common/logging.h>
+#include "ncode_common/src/logging.h"
 
 // disable float-equal warnings on GCC/clang
 #if defined(__clang__) || defined(__GNUC__) || defined(__GNUG__)

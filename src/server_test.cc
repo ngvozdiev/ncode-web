@@ -140,8 +140,8 @@ TEST_F(Fixture, MultiSequentialConnections) {
       incoming_.Drain();
 
   ASSERT_EQ(2, contents.size());
-  ASSERT_EQ(10000, contents[0]->message.size());
-  ASSERT_EQ(10000, contents[1]->message.size());
+  ASSERT_EQ(1000, contents[0]->message.size());
+  ASSERT_EQ(1000, contents[1]->message.size());
 }
 //
 // TEST_F(Fixture, MultiSimultaneousConnection) {

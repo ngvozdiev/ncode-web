@@ -1,11 +1,11 @@
 #include "grapher.h"
 
-#include <ncode/ncode_common/file.h>
 #include <initializer_list>
 #include <tuple>
 
 #include "gtest/gtest.h"
 #include "web_page.h"
+#include "ncode_common/src/file.h"
 
 namespace nc {
 namespace grapher {

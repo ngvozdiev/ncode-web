@@ -1,12 +1,13 @@
 #ifndef NCODE_WEB_GRAPH_H
 #define NCODE_WEB_GRAPH_H
 
-#include <ncode/ncode_net/net_common.h>
 #include <stddef.h>
 #include <functional>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "ncode_net/src/net_common.h"
 
 namespace nc {
 namespace web {
@@ -43,12 +44,12 @@ struct EdgeData {
 
 // A path through the graph.
 struct PathData {
-  PathData(const net::GraphPath* path, const std::string& label = "",
+  PathData(const net::Walk* path, const std::string& label = "",
            const std::string& legend_label = "")
       : path(path), legend_label(legend_label), label(label) {}
 
   // The path.
-  const net::GraphPath* path;
+  const net::Walk* path;
 
   // A label that will be displayed next to the path's legend entry.
   std::string legend_label;

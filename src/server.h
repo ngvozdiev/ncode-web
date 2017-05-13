@@ -1,8 +1,6 @@
 #ifndef NCODE_WEB_SERVER_H_
 #define NCODE_WEB_SERVER_H_
 
-#include <ncode/ncode_common/common.h>
-#include <ncode/ncode_common/ptr_queue.h>
 #include <stddef.h>
 #include <unistd.h>
 #include <array>
@@ -21,17 +19,26 @@
 #include <sys/socket.h>
 #include <fcntl.h>
 
+#include "ncode_common/src/common.h"
+#include "ncode_common/src/ptr_queue.h"
+
 namespace nc {
 namespace web {
 
 bool BlockingRawReadFromSocket(int sock, char* buf, uint32_t len);
 
+// The main datum that the server produces/consumes.
 template <typename HeaderType>
 struct HeaderAndMessage {
-  HeaderAndMessage(int socket) : socket(socket) {}
+  HeaderAndMessage(uint64_t connection_id)
+      : connection_id(connection_id), last_in_connection(false) {}
 
-  // Socket this message should be sent to / was received on.
-  int socket;
+  // Connection this message should be sent to / was received on.
+  uint64_t connection_id;
+
+  // If this is true the server will terminate the connection after sending this
+  // message.
+  bool last_in_connection;
 
   HeaderType header;
   std::vector<char> message;
@@ -153,13 +160,15 @@ template <typename HeaderType>
 bool BlockingWriteMessageToSocket(
     std::unique_ptr<HeaderAndMessage<HeaderType>> msg) {
   char* header_ptr = reinterpret_cast<char*>(&msg->header);
-  if (!BlockingRawWriteToSocket(msg->socket, header_ptr, sizeof(HeaderType))) {
+  if (!BlockingRawWriteToSocket(msg->connection_id, header_ptr,
+                                sizeof(HeaderType))) {
     return false;
   }
 
   const std::vector<char>& message_v = msg->message;
   const char* message_ptr = message_v.data();
-  if (!BlockingRawWriteToSocket(msg->socket, message_ptr, message_v.size())) {
+  if (!BlockingRawWriteToSocket(msg->connection_id, message_ptr,
+                                message_v.size())) {
     return false;
   }
 
@@ -279,8 +288,6 @@ class TCPServer {
 
     fcntl(socket, F_SETFL, O_NONBLOCK);
     *new_socket = socket;
-    LOG(INFO) << "New connection with " << inet_ntoa(remote_address.sin_addr)
-              << " socket " << socket;
 
     active_connections_.emplace(
         std::piecewise_construct, std::forward_as_tuple(socket),
@@ -292,17 +299,14 @@ class TCPServer {
     int last_fd = tcp_socket_;
     fd_set master;
     fd_set read_fds;
-    fd_set write_fds;
 
     FD_ZERO(&master);
     FD_ZERO(&read_fds);
-    FD_ZERO(&write_fds);
 
     FD_SET(tcp_socket_, &master);
 
     while (!to_kill_) {
       read_fds = master;
-      write_fds = master;
 
       timeval tv = {0, 0};
       tv.tv_sec = 1;
@@ -310,6 +314,18 @@ class TCPServer {
       int select_return = select(last_fd + 1, &read_fds, nullptr, NULL, &tv);
       if (select_return < 0) {
         LOG(FATAL) << "Unable to select: " << strerror(errno);
+      }
+
+      {
+        std::lock_guard<std::mutex> lock(mu_);
+        for (int socket_to_close : sockets_to_close_) {
+          active_connections_.erase(socket_to_close);
+          close(socket_to_close);
+          FD_CLR(socket_to_close, &master);
+          FD_CLR(socket_to_close, &read_fds);
+        }
+
+        sockets_to_close_.clear();
       }
 
       if (select_return == 0) {
@@ -335,14 +351,15 @@ class TCPServer {
             ServerConnection<HeaderType>* connection =
                 FindOrNull(active_connections_, i);
             if (connection == nullptr) {
-              //              LOG(INFO) << "Missing connection for socket " <<
-              //              i;
+              LOG(INFO) << "Missing connection for socket " << i;
               continue;
             }
 
             if (!connection->Read()) {
               LOG(INFO) << "Error in connection";
               active_connections_.erase(i);
+              close(i);
+              FD_CLR(i, &master);
             }
           }
         }
@@ -364,8 +381,15 @@ class TCPServer {
         break;
       }
 
+      int socket = message->connection_id;
+      bool last = message->last_in_connection;
       if (!BlockingWriteMessageToSocket(std::move(message))) {
         break;
+      }
+
+      if (last) {
+        std::lock_guard<std::mutex> lock(mu_);
+        sockets_to_close_.emplace_back(socket);
       }
     }
   }
@@ -391,6 +415,12 @@ class TCPServer {
   // Queues for messages leaving out/coming in.
   QueueType* incoming_;
   QueueType* outgoing_;
+
+  // Sockets to remove from the set of listening sockets.
+  std::vector<int> sockets_to_close_;
+
+  // Protected sockets_to_close_.
+  std::mutex mu_;
 
   DISALLOW_COPY_AND_ASSIGN(TCPServer);
 };
@@ -435,8 +465,8 @@ class ClientConnection {
 
   // Writes a message
   bool WriteToSocket(std::unique_ptr<HeaderAndMessage<HeaderType>> msg) const {
-    if (msg->socket == -1) {
-      msg->socket = tcp_socket_;
+    if (msg->connection_id == -1) {
+      msg->connection_id = tcp_socket_;
     }
     return BlockingWriteMessageToSocket(std::move(msg));
   }

@@ -19,18 +19,14 @@ if (NCODE_WEB_TSAN)
    set(NCODE_WEB_BASE_LD_FLAGS "${NCODE_WEB_BASE_LD_FLAGS} -fsanitize=thread")
 endif()
 
-if(APPLE)
-elseif(UNIX)
-  set(NOCDE_NET_BASE_FLAGS "${NCODE_WEB_BASE_FLAGS} -pthread")
-endif()
-
-if (NCODE_DEBUG)
+if (NCODE_WEB_DEBUG)
   set(NCODE_WEB_BASE_FLAGS "${NCODE_WEB_BASE_FLAGS} -O0 -fno-omit-frame-pointer --coverage")
 else()
-  set(NCODE_WEB_BASE_FLAGS "${NCODE_WEB_BASE_FLAGS} -O3 -march=native -DNDEBUG")   
+  set(NCODE_WEB_BASE_FLAGS "${NCODE_WEB_BASE_FLAGS} -O3 -march=native -DNDEBUG")
 endif()
 
 set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${NCODE_WEB_BASE_FLAGS}")
+set(CMAKE_C_FLAGS "-O3 -march=native -DNDEBUG")
 set(CMAKE_LINKER_FLAGS "${CMAKE_LINKER_FLAGS} ${NCODE_WEB_BASE_LD_FLAGS} --coverage")
 
 if (NOT NCODE_WEB_DISABLE_TESTS)
@@ -44,11 +40,23 @@ if (NOT NCODE_WEB_DISABLE_TESTS)
 endif()
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_extensions)
-find_package(NCodeCommon REQUIRED)
-find_package(NCodeNet REQUIRED)
-find_package(Ctemplate REQUIRED)
 
-include_directories(${CMAKE_BINARY_DIR})
+#----------------Google C++ template ----------------
+include(ExternalProject)
+set(CTEMPLATE_TARBALL http://github.com/OlafvdSpek/ctemplate/archive/ctemplate-2.3.tar.gz
+    CACHE STRING "Path to download CTemplate (can be local file://)" FORCE)
+ExternalProject_Add(
+   	ctemplate
+		INSTALL_DIR ${PROJECT_BINARY_DIR}/ctemplate
+		URL ${CTEMPLATE_TARBALL}
+		CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --disable-shared --enable-static  ${CTEMPLATE_CONFIGURE_OPTIONS}
+		BUILD_COMMAND make
+		BUILD_IN_SOURCE 1
+)
+
+add_subdirectory(external/ncode_common)
+add_subdirectory(external/ncode_net)
+include_directories(${CMAKE_SOURCE_DIR}/external ${PROJECT_BINARY_DIR}/ctemplate/include)
 
 # Creates C resources file from files in given directory
 function(create_resources dir output prefix)
@@ -74,27 +82,13 @@ endfunction()
 create_resources("${PROJECT_SOURCE_DIR}/data/www" "${PROJECT_BINARY_DIR}/www_resources.c" "www")
 create_resources("${PROJECT_SOURCE_DIR}/data/grapher_templates" "${PROJECT_BINARY_DIR}/grapher_resources.c" "grapher")
 
-################################
-# Web and grapher
-################################
-set(WEB_HEADER_FILES src/web_page.h src/graph.h src/grapher.h src/server.h src/fcgi.h)
-add_library(ncode_web STATIC src/web_page.cc src/graph.cc src/grapher.cc src/server.cc src/fcgi.cc ${PROJECT_BINARY_DIR}/www_resources.c ${PROJECT_BINARY_DIR}/grapher_resources.c ${WEB_HEADER_FILES})
-target_link_libraries(ncode_web ncode_common ncode_net ${CTEMPLATE_LIBRARIES})
+set(WEB_HEADER_FILES src/web_page.h src/graph.h src/grapher.h src/server.h src/mongoose.h)
+add_library(ncode_web STATIC src/web_page.cc src/graph.cc src/grapher.cc src/server.cc src/mongoose.c ${PROJECT_BINARY_DIR}/www_resources.c ${PROJECT_BINARY_DIR}/grapher_resources.c ${WEB_HEADER_FILES})
+target_link_libraries(ncode_web ncode_common ncode_net ${PROJECT_BINARY_DIR}/ctemplate/lib/libctemplate.a)
 
 if (NOT NCODE_WEB_DISABLE_TESTS)
   add_test_exec(web_page_test src/web_page_test.cc ncode_web)
   add_test_exec(graph_test src/graph_test.cc ncode_web)
   add_test_exec(grapher_test src/grapher_test.cc ncode_web)
   add_test_exec(server_test src/server_test.cc ncode_web)
-  add_test_exec(fcgi_test src/fcgi_test.cc ncode_web)
 endif()
-
-add_executable(fcgi_main src/fcgi_main.cc)
-target_link_libraries(fcgi_main ncode_web gflags pthread)
-
-INSTALL(TARGETS ncode_web
-  DESTINATION "lib")
-
-INSTALL (
-  FILES ${WEB_HEADER_FILES}
-  DESTINATION include/ncode/ncode_web)

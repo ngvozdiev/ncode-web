@@ -1,14 +1,16 @@
 #include "web_page.h"
 
-#include <ctemplate/template.h>
-#include <ctemplate/template_dictionary.h>
-#include <ctemplate/template_enums.h>
-#include <ncode/ncode_common/logging.h>
-#include <ncode/ncode_common/strutil.h>
-#include <ncode/ncode_common/substitute.h>
 #include <algorithm>
+#include <iostream>
 #include <iterator>
 #include <memory>
+
+#include "ctemplate/template.h"
+#include "ctemplate/template_dictionary.h"
+#include "ctemplate/template_enums.h"
+#include "ncode_common/src/logging.h"
+#include "ncode_common/src/strutil.h"
+#include "ncode_common/src/substitute.h"
 
 namespace nc {
 namespace web {

@@ -3,15 +3,15 @@
 #include <ctemplate/template.h>
 #include <ctemplate/template_dictionary.h>
 #include <ctemplate/template_enums.h>
-#include <ncode/ncode_common/file.h>
-#include <ncode/ncode_common/stats.h>
-#include <ncode/ncode_common/strutil.h>
-#include <ncode/ncode_common/substitute.h>
 #include <functional>
 #include <memory>
 #include <random>
 
 #include "web_page.h"
+#include "ncode_common/src/file.h"
+#include "ncode_common/src/stats.h"
+#include "ncode_common/src/strutil.h"
+#include "ncode_common/src/substitute.h"
 
 namespace nc {
 namespace grapher {

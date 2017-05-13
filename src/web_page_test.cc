@@ -2,9 +2,9 @@
 
 #include <ctemplate/template.h>
 #include <ctemplate/template_enums.h>
-#include <ncode/ncode_common/strutil.h>
-#include <ncode/ncode_common/substitute.h>
 
+#include "ncode_common/src/strutil.h"
+#include "ncode_common/src/substitute.h"
 #include "gtest/gtest.h"
 
 namespace nc {

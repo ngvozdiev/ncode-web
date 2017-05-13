@@ -3,10 +3,11 @@
 
 #include <stddef.h>
 #include <map>
-#include <ncode/ncode_common/common.h>
 #include <string>
 #include <utility>
 #include <vector>
+
+#include "ncode_common/src/common.h"
 
 namespace nc {
 namespace web {
