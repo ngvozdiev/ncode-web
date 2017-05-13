@@ -1,7 +1,7 @@
 #include "web_page.h"
 
-#include <ctemplate/template.h>
-#include <ctemplate/template_enums.h>
+#include "ctemplate/template.h"
+#include "ctemplate/template_enums.h"
 
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/substitute.h"

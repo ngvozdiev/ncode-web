@@ -1,8 +1,8 @@
 #include "graph.h"
 
-#include <ctemplate/template.h>
-#include <ctemplate/template_dictionary.h>
-#include <ctemplate/template_enums.h>
+#include "ctemplate/template.h"
+#include "ctemplate/template_dictionary.h"
+#include "ctemplate/template_enums.h"
 #include <algorithm>
 #include <map>
 #include <set>

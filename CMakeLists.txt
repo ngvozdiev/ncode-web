@@ -40,22 +40,9 @@ endif()
 
 set(CMAKE_MODULE_PATH ${PROJECT_SOURCE_DIR}/cmake_extensions)
 
-#----------------Google C++ template ----------------
-include(ExternalProject)
-set(CTEMPLATE_TARBALL http://github.com/OlafvdSpek/ctemplate/archive/ctemplate-2.3.tar.gz
-    CACHE STRING "Path to download CTemplate (can be local file://)" FORCE)
-ExternalProject_Add(
-   	ctemplate
-		INSTALL_DIR ${PROJECT_BINARY_DIR}/ctemplate
-		URL ${CTEMPLATE_TARBALL}
-		CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --disable-shared --enable-static
-		BUILD_COMMAND make
-		BUILD_IN_SOURCE 1
-)
-
 add_subdirectory(external/ncode_common)
 add_subdirectory(external/ncode_net)
-include_directories(${CMAKE_SOURCE_DIR}/external ${PROJECT_BINARY_DIR}/ctemplate/include)
+include_directories(${CMAKE_SOURCE_DIR}/external)
 
 # Creates C resources file from files in given directory
 function(create_resources dir output prefix)
@@ -81,9 +68,27 @@ endfunction()
 create_resources("${PROJECT_SOURCE_DIR}/data/www" "${PROJECT_BINARY_DIR}/www_resources.c" "www")
 create_resources("${PROJECT_SOURCE_DIR}/data/grapher_templates" "${PROJECT_BINARY_DIR}/grapher_resources.c" "grapher")
 
+# Code "stolen" from Google's ctemplates
+add_library(ctemplate STATIC src/ctemplate/template.cc
+            src/ctemplate/template_dictionary.cc
+            src/ctemplate/template_modifiers.cc
+            src/ctemplate/template_annotator.cc
+            src/ctemplate/template_pathops.cc
+            src/ctemplate/per_expand_data.cc
+            src/ctemplate/template_string.cc
+            src/ctemplate/template_cache.cc
+            src/ctemplate/htmlparser/htmlparser.cc
+            src/ctemplate/htmlparser/jsparser.cc
+            src/ctemplate/htmlparser/statemachine.cc
+            src/ctemplate/base/arena.cc)
+
+# Silence warnings about unused stuff in ctemplates
+set_target_properties(ctemplate PROPERTIES COMPILE_FLAGS
+                      "-Wno-unused-parameter -Wno-unused-const-variable -Wno-sign-compare -Wno-unused-private-field")
+
 set(WEB_HEADER_FILES src/web_page.h src/graph.h src/grapher.h src/server.h src/mongoose.h)
 add_library(ncode_web STATIC src/web_page.cc src/graph.cc src/grapher.cc src/server.cc src/mongoose.c ${PROJECT_BINARY_DIR}/www_resources.c ${PROJECT_BINARY_DIR}/grapher_resources.c ${WEB_HEADER_FILES})
-target_link_libraries(ncode_web ncode_common ncode_net ${PROJECT_BINARY_DIR}/ctemplate/lib/libctemplate.a)
+target_link_libraries(ncode_web ncode_common ncode_net ctemplate)
 
 if (NOT NCODE_WEB_DISABLE_TESTS)
   add_test_exec(web_page_test src/web_page_test.cc ncode_web)

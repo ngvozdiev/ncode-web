@@ -1,8 +1,8 @@
 #include "grapher.h"
 
-#include <ctemplate/template.h>
-#include <ctemplate/template_dictionary.h>
-#include <ctemplate/template_enums.h>
+#include "ctemplate/template.h"
+#include "ctemplate/template_dictionary.h"
+#include "ctemplate/template_enums.h"
 #include <functional>
 #include <memory>
 #include <random>
