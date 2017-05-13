@@ -1,17 +1,20 @@
 #include "grapher.h"
 
-#include "ctemplate/template.h"
-#include "ctemplate/template_dictionary.h"
-#include "ctemplate/template_enums.h"
 #include <functional>
+#include <iomanip>
+#include <iostream>
 #include <memory>
 #include <random>
+#include <type_traits>
 
-#include "web_page.h"
 #include "ncode_common/src/file.h"
 #include "ncode_common/src/stats.h"
 #include "ncode_common/src/strutil.h"
 #include "ncode_common/src/substitute.h"
+#include "ctemplate/template.h"
+#include "ctemplate/template_dictionary.h"
+#include "ctemplate/template_enums.h"
+#include "web_page.h"
 
 namespace nc {
 namespace grapher {
@@ -129,6 +132,16 @@ static std::vector<DataSeries1D> Preprocess1DData(
   return return_data;
 }
 
+static std::string ToStringMaxDecimals(double value, int decimals) {
+  std::ostringstream ss;
+  ss << std::fixed << std::setprecision(decimals) << value;
+  std::string s = ss.str();
+  if (decimals > 0 && s[s.find_last_not_of('0')] == '.') {
+    s.erase(s.size() - decimals + 1);
+  }
+  return s;
+}
+
 void HtmlGrapher::PlotLine(const PlotParameters2D& plot_params,
                            const std::vector<DataSeries2D>& series) {
   page_->AddScript(kPlotlyJS);
@@ -152,18 +165,18 @@ void HtmlGrapher::PlotLine(const PlotParameters2D& plot_params,
       data = SampleRandom(data, max_values_);
     }
 
-    std::vector<double> x(data.size());
-    std::vector<double> y(data.size());
+    std::vector<std::string> x_formatted(data.size());
+    std::vector<std::string> y_formatted(data.size());
     for (size_t i = 0; i < data.size(); ++i) {
-      x[i] = data[i].first;
-      y[i] = data[i].second;
+      x_formatted[i] = ToStringMaxDecimals(data[i].first, 3);
+      y_formatted[i] = ToStringMaxDecimals(data[i].second, 3);
     }
 
     std::string var_name = Substitute("data_$0", i);
     var_names.push_back(var_name);
     std::string series_string = StrCat("var ", var_name, " = {x: [");
-    StrAppend(&series_string, Join(x, ","), "], y: [", Join(y, ","),
-              "], mode: 'lines', ");
+    StrAppend(&series_string, Join(x_formatted, ","), "], y: [",
+              Join(y_formatted, ","), "], mode: 'lines', ");
     StrAppend(&series_string, Substitute("name : '$0'", series[i].label), "};");
     StrAppend(&script, series_string);
   }
@@ -195,8 +208,10 @@ void HtmlGrapher::PlotStackedArea(const PlotParameters2D& plot_params,
 
   size_t num_points = xs.size();
   std::vector<double> scaled_xs = xs;
+  std::vector<std::string> x_formatted(num_points);
   for (size_t i = 0; i < num_points; ++i) {
     scaled_xs[i] *= plot_params.x_scale;
+    x_formatted[i] = ToStringMaxDecimals(scaled_xs[i], 3);
   }
 
   std::vector<double> ys_cumulative(num_points, 0.0);
@@ -204,9 +219,12 @@ void HtmlGrapher::PlotStackedArea(const PlotParameters2D& plot_params,
     std::vector<std::pair<double, double>>& data = processed_series[i].data;
     Empirical2DFunction f(data, Empirical2DFunction::LINEAR);
 
+    std::vector<std::string> y_formatted(num_points);
     for (size_t point_index = 0; point_index < num_points; ++point_index) {
       double x = scaled_xs[point_index];
       ys_cumulative[point_index] += f.Eval(x);
+      y_formatted[point_index] =
+          ToStringMaxDecimals(ys_cumulative[point_index], 3);
     }
 
     std::string var_name = Substitute("data_$0", i);
@@ -215,7 +233,7 @@ void HtmlGrapher::PlotStackedArea(const PlotParameters2D& plot_params,
     std::string fill_type = i == 0 ? "tozeroy" : "tonexty";
     std::string series_string =
         Substitute("var $0 = {x: [$1], y: [$2], fill:'$3', name:'$4'};",
-                   var_name, Join(scaled_xs, ","), Join(ys_cumulative, ","),
+                   var_name, Join(x_formatted, ","), Join(y_formatted, ","),
                    fill_type, series[i].label);
     StrAppend(&script, series_string);
   }

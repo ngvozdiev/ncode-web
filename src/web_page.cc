@@ -85,7 +85,7 @@ std::string HtmlPage::Construct() const {
   StrAppend(&return_string, kTitleOpenTag, title_, kTitleCloseTag);
   StrAppend(&return_string, ConstructHead());
   StrAppend(&return_string, kHeadCloseTag, kBodyOpenTag, body_);
-  StrAppend(&return_string, kBodyCloseTag, kHTMLCloseTag);
+  StrAppend(&return_string, kBodyCloseTag, kHTMLCloseTag, "\n");
   return return_string;
 }
 
