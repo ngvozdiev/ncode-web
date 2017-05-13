@@ -22,7 +22,7 @@ class PageFixture : public ::testing::Test {
 
 TEST_F(PageFixture, Init) {
   ASSERT_EQ(Substitute("<html lang=\"en\"><head><title>$0</title>"
-                       "</head><body></body></html>",
+                       "</head><body></body></html>\n",
                        kTitle),
             page_.Construct());
 }
@@ -30,7 +30,7 @@ TEST_F(PageFixture, Init) {
 TEST_F(PageFixture, Head) {
   StrAppend(page_.head(), "stuff");
   ASSERT_EQ(Substitute("<html lang=\"en\"><head><title>$0</title>stuff"
-                       "</head><body></body></html>",
+                       "</head><body></body></html>\n",
                        kTitle),
             page_.Construct());
 }
@@ -38,7 +38,7 @@ TEST_F(PageFixture, Head) {
 TEST_F(PageFixture, Body) {
   StrAppend(page_.body(), "stuff");
   ASSERT_EQ(Substitute("<html lang=\"en\"><head><title>$0</title>"
-                       "</head><body>stuff</body></html>",
+                       "</head><body>stuff</body></html>\n",
                        kTitle),
             page_.Construct());
 }
@@ -49,11 +49,11 @@ TEST_F(PageFixture, HeadElement) {
       "src=\"https://awesomescript\"></script>";
   std::string expected = Substitute(
       "<html lang=\"en\"><head><title>$0</title>$1"
-      "</head><body></body></html>",
+      "</head><body></body></html>\n",
       kTitle, script);
   std::string expected_twice = Substitute(
       "<html lang=\"en\"><head><title>$0</title>$1$2"
-      "</head><body></body></html>",
+      "</head><body></body></html>\n",
       kTitle, script, script);
 
   page_.AddOrUpdateHeadElement("something", script);
