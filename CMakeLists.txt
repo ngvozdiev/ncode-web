@@ -3,7 +3,6 @@ cmake_minimum_required(VERSION 2.8.7)
 project(NCodeWeb)
 
 option(NCODE_WEB_DISABLE_TESTS "If tests should be compiled or not" ON)
-option(NCODE_WEB_DISABLE_BENCHMARKS "If benchmarks should be compiled or not" ON)
 option(NCODE_WEB_DEBUG "A debug build" OFF)
 option(NCODE_WEB_ASAN "Compile with ASAN on" OFF)
 option(NCODE_WEB_TSAN "Compile with TSAN on" OFF)
@@ -49,7 +48,7 @@ ExternalProject_Add(
    	ctemplate
 		INSTALL_DIR ${PROJECT_BINARY_DIR}/ctemplate
 		URL ${CTEMPLATE_TARBALL}
-		CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --disable-shared --enable-static  ${CTEMPLATE_CONFIGURE_OPTIONS}
+		CONFIGURE_COMMAND <SOURCE_DIR>/configure --prefix=<INSTALL_DIR> --disable-shared --enable-static
 		BUILD_COMMAND make
 		BUILD_IN_SOURCE 1
 )

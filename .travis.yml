@@ -49,5 +49,5 @@ before_install:
 script:
   - mkdir build
   - cd build
-  - cmake -DCMAKE_CXX_COMPILER=$COMPILER -DNCODE_WEB_DISABLE_TESTS=OFF -DNCODE_WEB_DISABLE_BENCHMARKS=OFF .. && make
+  - cmake -DCMAKE_CXX_COMPILER=$COMPILER -DNCODE_WEB_DISABLE_TESTS=OFF .. && make
   - make test
